@@ -110,12 +110,9 @@ final class AutoScannerModel: NSObject, ObservableObject, ARSessionDelegate {
 
             let ciImage = CIImage(cvPixelBuffer: pixelBuffer).oriented(.right)
             let context = CIContext()
-            guard let colorSpace = CGColorSpace(name: CGColorSpace.sRGB),
-                  let jpegData = context.jpegRepresentation(
-                    of: ciImage,
-                    colorSpace: colorSpace,
-                    options: [.compressionQuality: 0.92]
-                  ) else { return }
+            guard let cgImage = context.createCGImage(ciImage, from: ciImage.extent) else { return }
+            let jpegData = UIImage(cgImage: cgImage).jpegData(compressionQuality: 0.92)
+            guard let jpegData else { return }
 
             let fileName = String(format: "img_%04d.jpg", currentCount)
             let fileURL = folder.appendingPathComponent(fileName)
