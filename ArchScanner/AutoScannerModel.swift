@@ -114,7 +114,7 @@ final class AutoScannerModel: NSObject, ObservableObject, ARSessionDelegate {
                   let jpegData = context.jpegRepresentation(
                     of: ciImage,
                     colorSpace: colorSpace,
-                    options: [CIImageRepresentationOption(rawValue: kCGImageDestinationLossyCompressionFactor as String): 0.92]
+                    options: [.compressionQuality: 0.92]
                   ) else { return }
 
             let fileName = String(format: "img_%04d.jpg", currentCount)
