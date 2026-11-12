@@ -17,14 +17,19 @@ struct ContentView: View {
                     .background(.ultraThinMaterial)
                     .clipShape(RoundedRectangle(cornerRadius: 12))
 
+                if !scanner.currentSeriesName.isEmpty {
+                    Text(scanner.currentSeriesName)
+                        .font(.caption.monospaced())
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 4)
+                        .background(.ultraThinMaterial)
+                        .clipShape(Capsule())
+                }
+
                 HStack(spacing: 20) {
                     Button {
-                        scanner.isScanning.toggle()
-                        if !scanner.isScanning {
-                            scanner.statusText = "Пауза. Снято: \(scanner.capturedCount)"
-                        } else if scanner.capturedCount == 0 {
-                            scanner.statusText = "Сканирую… двигайте вокруг арки"
-                        }
+                        scanner.setScanning(!scanner.isScanning)
                     } label: {
                         Text(scanner.isScanning ? "Пауза" : "Начать скан")
                             .font(.title3.bold())
@@ -39,13 +44,14 @@ struct ContentView: View {
                         Button {
                             scanner.resetSession()
                         } label: {
-                            Image(systemName: "trash")
+                            Image(systemName: "plus.rectangle.on.folder")
                                 .font(.title2)
                                 .foregroundStyle(.white)
                                 .padding(14)
                                 .background(Color.gray.opacity(0.8))
                                 .clipShape(RoundedRectangle(cornerRadius: 16))
                         }
+                        .accessibilityLabel("Новая серия")
                     }
                 }
             }

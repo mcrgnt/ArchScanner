@@ -8,3 +8,6 @@ xcuserdata/
 *.ipa
 Payload/
 .swiftpm/
+photos/
+photos_toy/
+meshroom/

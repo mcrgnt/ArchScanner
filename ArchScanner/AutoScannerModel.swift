@@ -9,19 +9,9 @@ struct ARViewContainer: UIViewRepresentable {
 
     func makeUIView(context: Context) -> ARView {
         let arView = ARView(frame: .zero)
-
-        let config = ARWorldTrackingConfiguration()
-        if ARWorldTrackingConfiguration.supportsSceneReconstruction(.mesh) {
-            config.sceneReconstruction = .mesh
-        }
-        config.isAutoFocusEnabled = true
-        config.environmentTexturing = .automatic
-
-        arView.debugOptions.insert(.showSceneUnderstanding)
         arView.session.delegate = scanner
-        arView.session.run(config)
         scanner.arView = arView
-
+        scanner.applyARConfiguration(scanning: false)
         return arView
     }
 
@@ -31,7 +21,8 @@ struct ARViewContainer: UIViewRepresentable {
 final class AutoScannerModel: NSObject, ObservableObject, ARSessionDelegate {
     @Published var isScanning = false
     @Published var capturedCount = 0
-    @Published var statusText = "Наведите на арку и нажмите Начать"
+    @Published var statusText = "Наведите на объект и нажмите Начать"
+    @Published var currentSeriesName = ""
 
     weak var arView: ARView?
     private var lastCaptureTransform: simd_float4x4?
@@ -41,26 +32,95 @@ final class AutoScannerModel: NSObject, ObservableObject, ARSessionDelegate {
     private let minDistanceMeters: Float = 0.05
     private let minAngleDegrees: Float = 10.0
     private let minAmbientIntensity: CGFloat = 300
+    private let scansRootName = "Scans"
 
     override init() {
         super.init()
-        setupFolder()
+        startNewSeries()
     }
 
-    private func setupFolder() {
-        let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-        let folder = docs.appendingPathComponent("WheelArchScan", isDirectory: true)
-        try? FileManager.default.removeItem(at: folder)
-        try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-        saveDirectory = folder
+    func setScanning(_ scanning: Bool) {
+        isScanning = scanning
+        UIApplication.shared.isIdleTimerDisabled = scanning
+        applyARConfiguration(scanning: scanning)
+
+        if scanning {
+            if capturedCount == 0 {
+                statusText = "Сканирую… \(currentSeriesName)"
+            }
+        } else {
+            statusText = "Пауза. Снято: \(capturedCount) • \(currentSeriesName)"
+        }
     }
 
     func resetSession() {
-        isScanning = false
+        setScanning(false)
         capturedCount = 0
         lastCaptureTransform = nil
-        setupFolder()
-        statusText = "Сброшено. Готов к новому скану"
+        startNewSeries()
+        statusText = "Новая серия \(currentSeriesName). Готов к скану"
+    }
+
+    func applyARConfiguration(scanning: Bool) {
+        guard let arView else { return }
+
+        let config = ARWorldTrackingConfiguration()
+        config.isAutoFocusEnabled = true
+        config.environmentTexturing = .automatic
+
+        if scanning, ARWorldTrackingConfiguration.supportsSceneReconstruction(.mesh) {
+            config.sceneReconstruction = .mesh
+            arView.debugOptions.insert(.showSceneUnderstanding)
+        } else {
+            config.sceneReconstruction = []
+            arView.debugOptions.remove(.showSceneUnderstanding)
+        }
+
+        arView.session.run(config, options: [])
+    }
+
+    private func scansRootURL() -> URL {
+        let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        let root = docs.appendingPathComponent(scansRootName, isDirectory: true)
+        try? FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        return root
+    }
+
+    private func todayPrefix() -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = .current
+        formatter.dateFormat = "yyyy-MM-dd"
+        return formatter.string(from: Date())
+    }
+
+    private func startNewSeries() {
+        let root = scansRootURL()
+        let prefix = todayPrefix()
+        let nextIndex = nextSeriesIndex(in: root, prefix: prefix)
+        let name = String(format: "%@_%03d", prefix, nextIndex)
+        let folder = root.appendingPathComponent(name, isDirectory: true)
+        try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        saveDirectory = folder
+        currentSeriesName = name
+    }
+
+    private func nextSeriesIndex(in root: URL, prefix: String) -> Int {
+        let fm = FileManager.default
+        let names = (try? fm.contentsOfDirectory(atPath: root.path)) ?? []
+        var maxIndex = 0
+        let pattern = #"^\#(NSRegularExpression.escapedPattern(for: prefix))_(\d+)$"#
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return 1 }
+
+        for name in names {
+            let range = NSRange(name.startIndex..<name.endIndex, in: name)
+            guard let match = regex.firstMatch(in: name, range: range),
+                  match.numberOfRanges == 2,
+                  let idxRange = Range(match.range(at: 1), in: name),
+                  let value = Int(name[idxRange]) else { continue }
+            maxIndex = max(maxIndex, value)
+        }
+        return maxIndex + 1
     }
 
     func session(_ session: ARSession, didUpdate frame: ARFrame) {
@@ -69,7 +129,7 @@ final class AutoScannerModel: NSObject, ObservableObject, ARSessionDelegate {
         if let lightEstimate = frame.lightEstimate,
            lightEstimate.ambientIntensity < minAmbientIntensity {
             DispatchQueue.main.async {
-                self.statusText = "Темновато — подсветите зону"
+                self.statusText = "Темновато — подсветите зону • \(self.currentSeriesName)"
             }
             return
         }
@@ -121,7 +181,8 @@ final class AutoScannerModel: NSObject, ObservableObject, ARSessionDelegate {
                 try jpegData.write(to: fileURL)
                 DispatchQueue.main.async {
                     self?.capturedCount = currentCount
-                    self?.statusText = "Кадров: \(currentCount) • закрывайте пробелы в сетке"
+                    let series = self?.currentSeriesName ?? ""
+                    self?.statusText = "Кадров: \(currentCount) • \(series)"
                     UIImpactFeedbackGenerator(style: .light).impactOccurred()
                 }
             } catch {
