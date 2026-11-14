@@ -31,20 +31,23 @@ func TestStore_ReplaceFramesAndMeshFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := filepath.Join(meshDir, "texturedMesh.obj")
-	if err := os.WriteFile(want, []byte("o"), 0o644); err != nil {
+	obj := filepath.Join(meshDir, "texturedMesh.obj")
+	usdz := filepath.Join(meshDir, "texturedMesh.usdz")
+	if err := os.WriteFile(obj, []byte("o"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(usdz, []byte("z"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SetMeshJob("proj1", "v1", "job-1", "usdz"); err != nil {
 		t.Fatal(err)
 	}
 	got, err := st.MeshFile("proj1", "v1")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got != want {
-		t.Fatalf("got %q want %q", got, want)
-	}
-
-	if err := st.SetMeshJob("proj1", "v1", "job-1"); err != nil {
-		t.Fatal(err)
+	if got != usdz {
+		t.Fatalf("got %q want %q", got, usdz)
 	}
 	jid, err := st.LastJobID("proj1", "v1")
 	if err != nil {

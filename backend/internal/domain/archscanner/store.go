@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/mcrgnt/ArchScanner/backend/internal/domain/meshroom"
 	"github.com/omcrgnt/app"
 )
 
@@ -32,6 +33,7 @@ type Store struct {
 
 type versionMeta struct {
 	LastJobID string `json:"last_job_id,omitempty"`
+	Format    string `json:"format,omitempty"`
 }
 
 // IncomingFrame is one uploaded file for a version.
@@ -156,12 +158,33 @@ func (s *Store) ReplaceFrames(projectID, versionID string, frames []IncomingFram
 	return nil
 }
 
-func (s *Store) SetMeshJob(projectID, versionID, jobID string) error {
+func (s *Store) SetMeshJob(projectID, versionID, jobID, format string) error {
 	dir, err := s.versionDir(projectID, versionID)
 	if err != nil {
 		return err
 	}
-	return s.writeMeta(dir, versionMeta{LastJobID: jobID})
+	return s.writeMeta(dir, versionMeta{LastJobID: jobID, Format: format})
+}
+
+func (s *Store) MeshFormat(projectID, versionID string) (string, error) {
+	dir, err := s.versionDir(projectID, versionID)
+	if err != nil {
+		return "", err
+	}
+	if _, err := os.Stat(dir); err != nil {
+		if os.IsNotExist(err) {
+			return "", nil
+		}
+		return "", err
+	}
+	m, err := s.readMeta(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", nil
+		}
+		return "", err
+	}
+	return m.Format, nil
 }
 
 func (s *Store) LastJobID(projectID, versionID string) (string, error) {
@@ -197,19 +220,31 @@ func (s *Store) MeshFile(projectID, versionID string) (string, error) {
 		}
 		return "", err
 	}
-	var found string
+	format, _ := s.MeshFormat(projectID, versionID)
+	wantExt := "." + meshroom.NormalizeFormat(format)
+
+	var preferred, fallback string
 	_ = filepath.WalkDir(meshDir, func(path string, d os.DirEntry, err error) error {
 		if err != nil || d.IsDir() {
 			return err
 		}
-		switch strings.ToLower(filepath.Ext(d.Name())) {
-		case ".obj", ".gltf", ".glb", ".ply", ".abc":
-			found = path
-			return filepath.SkipAll
+		ext := strings.ToLower(filepath.Ext(d.Name()))
+		switch ext {
+		case ".usdz", ".obj", ".gltf", ".glb", ".ply", ".abc":
+			if ext == wantExt {
+				preferred = path
+				return filepath.SkipAll
+			}
+			if fallback == "" {
+				fallback = path
+			}
 		}
 		return nil
 	})
-	return found, nil
+	if preferred != "" {
+		return preferred, nil
+	}
+	return fallback, nil
 }
 
 func (s *Store) ListProjects() ([]string, error) {

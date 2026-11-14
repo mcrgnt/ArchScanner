@@ -20,6 +20,7 @@ func TestAppResources_Bootstrap(t *testing.T) {
 	t.Setenv("ARCHSCANNER_SERVER_HTTP_PORT", "18780")
 	t.Setenv("ARCHSCANNER_DATA_ROOT", t.TempDir())
 	t.Setenv("ARCHSCANNER_MESHROOM_BIN", "/opt/Meshroom-2025.1.0/meshroom_batch")
+	t.Setenv("ARCHSCANNER_MESHROOM_BLENDER", "/home/xxx/.local/bin/blender")
 	t.Setenv("ARCHSCANNER_MESHROOM_WORK_ROOT", t.TempDir())
 	t.Setenv("ARCHSCANNER_MESHROOM_PIPELINE", "photogrammetryDraft")
 	t.Setenv("ARCHSCANNER_MESHROOM_MAX_IMAGES", "24")

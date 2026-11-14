@@ -108,6 +108,7 @@ func TestReadMultipartFrames(t *testing.T) {
 	_, _ = fw.Write([]byte("jpeg-bytes"))
 	_ = w.WriteField("max_images", "12")
 	_ = w.WriteField("pipeline", "photogrammetryDraft")
+	_ = w.WriteField("format", "obj")
 	_ = w.Close()
 
 	req := httptest.NewRequest("POST", "/mesh", &buf)
@@ -120,7 +121,7 @@ func TestReadMultipartFrames(t *testing.T) {
 	if len(frames) != 1 || frames[0].Filename != "img_0001.jpg" {
 		t.Fatalf("frames=%+v", frames)
 	}
-	if opts.MaxImages != 12 || opts.Pipeline != "photogrammetryDraft" {
+	if opts.MaxImages != 12 || opts.Pipeline != "photogrammetryDraft" || opts.Format != "obj" {
 		t.Fatalf("opts=%+v", opts)
 	}
 }

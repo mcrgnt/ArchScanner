@@ -26,6 +26,8 @@ type Service struct {
 type MeshOpts struct {
 	MaxImages int
 	Pipeline  string
+	// Format is the deliverable for mesh/file (obj|usdz). Default usdz.
+	Format string
 }
 
 // MeshFileResult is the outcome of OpenMeshFile.
@@ -72,18 +74,20 @@ func (s *Service) SubmitMesh(ctx context.Context, projectID, versionID string, f
 		return "", err
 	}
 
+	format := meshroom.NormalizeFormat(opts.Format)
 	jobID, err := scheduler.Submit(s.sched, ctx, meshroom.JobType, meshroom.JobPayload{
 		ProjectID: projectID,
 		VersionID: versionID,
 		InputDir:  framesDir,
 		OutputDir: meshDir,
+		Format:    format,
 		MaxImages: opts.MaxImages,
 		Pipeline:  opts.Pipeline,
 	})
 	if err != nil {
 		return "", err
 	}
-	if err := s.store.SetMeshJob(projectID, versionID, jobID); err != nil {
+	if err := s.store.SetMeshJob(projectID, versionID, jobID, format); err != nil {
 		return "", err
 	}
 	return jobID, nil
@@ -148,6 +152,8 @@ func contentTypeFor(path string) string {
 		return ct
 	}
 	switch ext {
+	case ".usdz":
+		return "model/vnd.usdz+zip"
 	case ".obj":
 		return "model/obj"
 	case ".gltf":
@@ -178,6 +184,7 @@ func ReadMultipartFrames(r *http.Request, maxMemory int64) ([]IncomingFrame, Mes
 	}
 	opts := MeshOpts{
 		Pipeline: r.FormValue("pipeline"),
+		Format:   r.FormValue("format"),
 	}
 	if v := r.FormValue("max_images"); v != "" {
 		n, err := ParseMaxImages(v)

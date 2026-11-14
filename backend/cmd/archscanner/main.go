@@ -10,8 +10,8 @@ import (
 	"github.com/mcrgnt/ArchScanner/backend/internal/domain/archscanner"
 	"github.com/mcrgnt/ArchScanner/backend/internal/domain/meshroom"
 	"github.com/omcrgnt/app"
-	ophttp "github.com/omcrgnt/ops/transport/http"
 	"github.com/omcrgnt/obs"
+	ophttp "github.com/omcrgnt/ops/transport/http"
 	"github.com/omcrgnt/res"
 	"github.com/omcrgnt/res/unique"
 	srvhttp "github.com/omcrgnt/srv-http"
@@ -20,7 +20,7 @@ import (
 const envPrefix = "ARCHSCANNER"
 
 type _appResources struct {
-	ServerHTTPOps *ophttp.Server                  `ecfg:"OPS_HTTP"`
+	ServerHTTPOps *ophttp.Server                   `ecfg:"OPS_HTTP"`
 	ServerHTTP    *srvhttp.Server[*httpapi.Router] `ecfg:"SERVER_HTTP"`
 	Router        *httpapi.Router
 	Store         *archscanner.Store `ecfg:"DATA"`
