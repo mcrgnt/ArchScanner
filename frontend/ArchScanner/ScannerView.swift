@@ -79,12 +79,15 @@ struct ScannerView: View {
                     }
                 }
             }
-            .padding(.bottom, 30)
+            .padding(.bottom, 8)
         }
-        .navigationTitle("Сканер")
+        .navigationTitle(versionID)
         .navigationBarTitleDisplayMode(.inline)
-        .settingsGear()
+        .hideBackButtonKeepSwipe()
         .toolbarBackground(.hidden, for: .navigationBar)
+        .safeAreaInset(edge: .bottom) {
+            BottomChromeBar(showsPlus: false)
+        }
         .onAppear {
             let folder = ProjectPaths.versionFolder(projectID: projectID, versionID: versionID)
             scanner.reloadBackendSettings()

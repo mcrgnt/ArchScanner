@@ -9,16 +9,47 @@ struct ScanVersion: Identifiable, Codable, Equatable {
     var localMeshFileName: String?
 
     var displayTitle: String { id }
+
+    var createdAtLabel: String {
+        ArchDateFormat.versionMeta.string(from: createdAt)
+    }
 }
 
 struct ScanProject: Identifiable, Codable, Equatable {
     let id: String
     var name: String
     var createdAt: Date
+    var updatedAt: Date
     var versions: [ScanVersion]
 
-    var versionsNewestFirst: [ScanVersion] {
-        versions.sorted { $0.createdAt > $1.createdAt }
+    /// Oldest → newest (newest at bottom of inverted UI).
+    var versionsOldestFirst: [ScanVersion] {
+        versions.sorted { $0.createdAt < $1.createdAt }
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case id, name, createdAt, updatedAt, versions
+    }
+
+    init(id: String, name: String, createdAt: Date, updatedAt: Date, versions: [ScanVersion]) {
+        self.id = id
+        self.name = name
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+        self.versions = versions
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        name = try c.decode(String.self, forKey: .name)
+        createdAt = try c.decode(Date.self, forKey: .createdAt)
+        versions = try c.decodeIfPresent([ScanVersion].self, forKey: .versions) ?? []
+        if let updated = try c.decodeIfPresent(Date.self, forKey: .updatedAt) {
+            updatedAt = updated
+        } else {
+            updatedAt = versions.map(\.createdAt).max() ?? createdAt
+        }
     }
 }
 
@@ -63,8 +94,9 @@ final class ProjectsStore: ObservableObject {
         load()
     }
 
-    var projectsNewestFirst: [ScanProject] {
-        projects.sorted { $0.createdAt > $1.createdAt }
+    /// Oldest update → newest (newest at bottom).
+    var projectsOldestFirst: [ScanProject] {
+        projects.sorted { $0.updatedAt < $1.updatedAt }
     }
 
     func project(id: String) -> ScanProject? {
@@ -78,13 +110,15 @@ final class ProjectsStore: ObservableObject {
     @discardableResult
     func createProject(name: String) -> ScanProject {
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        let now = Date()
         let project = ScanProject(
             id: UUID().uuidString.lowercased(),
             name: trimmed.isEmpty ? "Проект" : trimmed,
-            createdAt: Date(),
+            createdAt: now,
+            updatedAt: now,
             versions: []
         )
-        projects.insert(project, at: 0)
+        projects.append(project)
         let versions = ProjectPaths.projectRoot(projectID: project.id)
             .appendingPathComponent("versions", isDirectory: true)
         try? FileManager.default.createDirectory(at: versions, withIntermediateDirectories: true)
@@ -96,17 +130,24 @@ final class ProjectsStore: ObservableObject {
     func createVersion(projectID: String) -> ScanVersion? {
         guard let idx = projects.firstIndex(where: { $0.id == projectID }) else { return nil }
         let versionID = nextVersionID(projectID: projectID)
+        let now = Date()
         let version = ScanVersion(
             id: versionID,
-            createdAt: Date(),
+            createdAt: now,
             frameCount: 0,
             meshReady: false,
             localMeshFileName: nil
         )
         let folder = ProjectPaths.versionFolder(projectID: projectID, versionID: versionID)
         try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-        FrameMetadataWriter.writeSeriesManifest(seriesName: versionID, folder: folder, frameCount: 0)
-        projects[idx].versions.insert(version, at: 0)
+        FrameMetadataWriter.writeSeriesManifest(
+            seriesName: versionID,
+            folder: folder,
+            frameCount: 0,
+            createdAt: now
+        )
+        projects[idx].versions.append(version)
+        projects[idx].updatedAt = now
         save()
         return version
     }
@@ -116,6 +157,7 @@ final class ProjectsStore: ObservableObject {
               let vIdx = projects[pIdx].versions.firstIndex(where: { $0.id == versionID }) else { return }
         guard projects[pIdx].versions[vIdx].frameCount != count else { return }
         projects[pIdx].versions[vIdx].frameCount = count
+        projects[pIdx].updatedAt = Date()
         save()
     }
 
@@ -124,6 +166,7 @@ final class ProjectsStore: ObservableObject {
               let vIdx = projects[pIdx].versions.firstIndex(where: { $0.id == versionID }) else { return }
         projects[pIdx].versions[vIdx].meshReady = true
         projects[pIdx].versions[vIdx].localMeshFileName = fileName
+        projects[pIdx].updatedAt = Date()
         save()
     }
 
@@ -139,6 +182,7 @@ final class ProjectsStore: ObservableObject {
         guard let idx = projects.firstIndex(where: { $0.id == id }) else { return }
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         projects[idx].name = trimmed.isEmpty ? projects[idx].name : trimmed
+        projects[idx].updatedAt = Date()
         save()
     }
 
@@ -172,30 +216,16 @@ final class ProjectsStore: ObservableObject {
         try? data.write(to: url, options: .atomic)
     }
 
+    /// Next id: v1, v2, …
     private func nextVersionID(projectID: String) -> String {
-        let prefix = todayPrefix()
         let existing = project(id: projectID)?.versions.map(\.id) ?? []
-        var maxIndex = 0
-        let pattern = #"^\#(NSRegularExpression.escapedPattern(for: prefix))_(\d+)$"#
-        guard let regex = try? NSRegularExpression(pattern: pattern) else {
-            return String(format: "%@_%03d", prefix, 1)
+        let maxExplicit = existing.compactMap { id -> Int? in
+            guard id.first == "v" else { return nil }
+            return Int(id.dropFirst())
+        }.max() ?? 0
+        if maxExplicit > 0 {
+            return "v\(maxExplicit + 1)"
         }
-        for name in existing {
-            let range = NSRange(name.startIndex..<name.endIndex, in: name)
-            guard let match = regex.firstMatch(in: name, range: range),
-                  match.numberOfRanges == 2,
-                  let idxRange = Range(match.range(at: 1), in: name),
-                  let value = Int(name[idxRange]) else { continue }
-            maxIndex = max(maxIndex, value)
-        }
-        return String(format: "%@_%03d", prefix, maxIndex + 1)
-    }
-
-    private func todayPrefix() -> String {
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.timeZone = .current
-        formatter.dateFormat = "yyyy-MM-dd"
-        return formatter.string(from: Date())
+        return "v\(existing.count + 1)"
     }
 }

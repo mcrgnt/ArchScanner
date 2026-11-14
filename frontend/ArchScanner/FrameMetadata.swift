@@ -85,13 +85,15 @@ enum FrameMetadataWriter {
     static func writeSeriesManifest(
         seriesName: String,
         folder: URL,
-        frameCount: Int
+        frameCount: Int,
+        createdAt: Date? = nil
     ) {
         let device = UIDevice.current
-        let payload: [String: Any] = [
+        let iso = ISO8601DateFormatter()
+        var payload: [String: Any] = [
             "series": seriesName,
             "frameCount": frameCount,
-            "updatedAt": ISO8601DateFormatter().string(from: Date()),
+            "updatedAt": iso.string(from: Date()),
             "device": [
                 "name": device.name,
                 "model": device.model,
@@ -103,6 +105,9 @@ enum FrameMetadataWriter {
                 "detail": "No public radial/tangential distortion coeffs on ARCamera; use intrinsics only or Meshroom self-calibration."
             ]
         ]
+        if let createdAt {
+            payload["createdAt"] = iso.string(from: createdAt)
+        }
         let url = folder.appendingPathComponent("series.json")
         if let data = try? JSONSerialization.data(withJSONObject: payload, options: [.prettyPrinted, .sortedKeys]) {
             try? data.write(to: url, options: .atomic)

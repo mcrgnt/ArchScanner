@@ -26,7 +26,10 @@ struct MeshViewerScreen: View {
         }
         .navigationTitle("Меш")
         .navigationBarTitleDisplayMode(.inline)
-        .settingsGear()
+        .hideBackButtonKeepSwipe()
+        .safeAreaInset(edge: .bottom) {
+            BottomChromeBar(showsPlus: false)
+        }
     }
 }
 
@@ -39,11 +42,14 @@ struct MeshViewerView: View {
             MeshOrbitView(url: url, model: model)
                 .ignoresSafeArea()
                 .gesture(
-                    DragGesture(minimumDistance: 0)
+                    DragGesture(minimumDistance: 8)
                         .onChanged { value in
+                            // leave left edge free for swipe-back
+                            guard value.startLocation.x > 28 else { return }
                             model.applyDrag(translation: value.translation, isEnded: false)
                         }
                         .onEnded { value in
+                            guard value.startLocation.x > 28 else { return }
                             model.applyDrag(translation: value.translation, isEnded: true)
                         }
                 )

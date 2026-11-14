@@ -7,54 +7,44 @@ struct ProjectsListView: View {
     @State private var newProjectName = ""
 
     var body: some View {
-        List {
+        Group {
             if store.projects.isEmpty {
                 ContentUnavailableView(
                     "Нет проектов",
                     systemImage: "folder",
-                    description: Text("Создайте первый проект")
+                    description: Text("Нажмите + внизу")
                 )
             } else {
-                ForEach(store.projectsNewestFirst) { project in
-                    NavigationLink(value: AppRoute.project(project.id)) {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(project.name)
-                                .font(.headline)
-                            Text("\(project.versions.count) версий")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
+                List {
+                    ForEach(store.projectsOldestFirst) { project in
+                        NavigationLink(value: AppRoute.project(project.id)) {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(project.name)
+                                    .font(.headline)
+                                Text(versionsLabel(project.versions.count))
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            .padding(.vertical, 4)
                         }
-                        .padding(.vertical, 4)
                     }
+                    .onDelete(perform: delete)
                 }
-                .onDelete(perform: delete)
+                .listStyle(.plain)
+                .defaultScrollAnchor(.bottom)
             }
         }
         .navigationTitle("Проекты")
-        .settingsGear()
-        .toolbar {
-            ToolbarItem(placement: .topBarLeading) {
-                Button {
+        .navigationBarTitleDisplayMode(.inline)
+        .safeAreaInset(edge: .bottom) {
+            BottomChromeBar(
+                showsPlus: true,
+                plusAccessibilityLabel: "Новый проект",
+                onPlus: {
                     newProjectName = ""
                     showNewProject = true
-                } label: {
-                    Label("Новый проект", systemImage: "plus")
                 }
-            }
-        }
-        .safeAreaInset(edge: .bottom) {
-            Button {
-                newProjectName = ""
-                showNewProject = true
-            } label: {
-                Text("Новый проект")
-                    .font(.headline)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 14)
-            }
-            .buttonStyle(.borderedProminent)
-            .padding()
-            .background(.bar)
+            )
         }
         .alert("Новый проект", isPresented: $showNewProject) {
             TextField("Название", text: $newProjectName)
@@ -69,9 +59,23 @@ struct ProjectsListView: View {
     }
 
     private func delete(at offsets: IndexSet) {
-        let items = store.projectsNewestFirst
+        let items = store.projectsOldestFirst
         for index in offsets {
             store.deleteProject(id: items[index].id)
         }
+    }
+
+    private func versionsLabel(_ count: Int) -> String {
+        let mod10 = count % 10
+        let mod100 = count % 100
+        let word: String
+        if mod10 == 1, mod100 != 11 {
+            word = "версия"
+        } else if (2...4).contains(mod10), !(12...14).contains(mod100) {
+            word = "версии"
+        } else {
+            word = "версий"
+        }
+        return "\(count) \(word)"
     }
 }

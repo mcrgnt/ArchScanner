@@ -15,52 +15,55 @@ struct ProjectDetailView: View {
     var body: some View {
         Group {
             if let project {
-                List {
-                    if project.versions.isEmpty {
-                        ContentUnavailableView(
-                            "Нет версий",
-                            systemImage: "camera",
-                            description: Text("Создайте версию и отсканируйте объект")
+                versionList(project)
+                    .navigationTitle(project.name)
+                    .navigationBarTitleDisplayMode(.inline)
+                    .hideBackButtonKeepSwipe()
+                    .safeAreaInset(edge: .bottom) {
+                        BottomChromeBar(
+                            showsPlus: true,
+                            plusAccessibilityLabel: "Новая версия",
+                            onPlus: { startNewVersion() }
                         )
-                    } else {
-                        ForEach(project.versionsNewestFirst) { version in
-                            VersionRow(
-                                projectID: projectID,
-                                version: version,
-                                isBusy: meshBusyVersionID == version.id,
-                                onCreateMesh: { createMesh(version: version) },
-                                onFetchForView: { fetchThenView(version: version) }
-                            )
-                        }
                     }
-                }
-                .navigationTitle(project.name)
-                .navigationBarTitleDisplayMode(.inline)
-                .settingsGear()
-                .safeAreaInset(edge: .bottom) {
-                    Button {
-                        startNewVersion()
-                    } label: {
-                        Text("Новая версия")
-                            .font(.headline)
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 14)
+                    .alert("Меш", isPresented: Binding(
+                        get: { meshError != nil },
+                        set: { if !$0 { meshError = nil } }
+                    )) {
+                        Button("OK", role: .cancel) { meshError = nil }
+                    } message: {
+                        Text(meshError ?? "")
                     }
-                    .buttonStyle(.borderedProminent)
-                    .padding()
-                    .background(.bar)
-                }
-                .alert("Меш", isPresented: Binding(
-                    get: { meshError != nil },
-                    set: { if !$0 { meshError = nil } }
-                )) {
-                    Button("OK", role: .cancel) { meshError = nil }
-                } message: {
-                    Text(meshError ?? "")
-                }
             } else {
                 ContentUnavailableView("Проект не найден", systemImage: "exclamationmark.triangle")
+                    .hideBackButtonKeepSwipe()
             }
+        }
+    }
+
+    @ViewBuilder
+    private func versionList(_ project: ScanProject) -> some View {
+        if project.versions.isEmpty {
+            ContentUnavailableView(
+                "Нет версий",
+                systemImage: "camera",
+                description: Text("Нажмите + внизу")
+            )
+        } else {
+            List {
+                ForEach(project.versionsOldestFirst) { version in
+                    VersionRow(
+                        projectID: projectID,
+                        version: version,
+                        isBusy: meshBusyVersionID == version.id,
+                        onCreateMesh: { createMesh(version: version) },
+                        onFetchForView: { fetchThenView(version: version) }
+                    )
+                    .listRowInsets(EdgeInsets(top: 10, leading: 16, bottom: 10, trailing: 16))
+                }
+            }
+            .listStyle(.plain)
+            .defaultScrollAnchor(.bottom)
         }
     }
 
@@ -166,11 +169,13 @@ private struct VersionRow: View {
                     VStack(alignment: .leading, spacing: 2) {
                         Text(version.displayTitle)
                             .font(.headline)
-                        Text("Кадров: \(version.frameCount)")
+                            .foregroundStyle(.primary)
+                        Text("\(version.createdAtLabel) · кадров: \(version.frameCount)")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
                 }
+                .buttonStyle(.plain)
                 Spacer()
                 if isBusy {
                     ProgressView()
@@ -204,6 +209,5 @@ private struct VersionRow: View {
                 }
             }
         }
-        .padding(.vertical, 6)
     }
 }
