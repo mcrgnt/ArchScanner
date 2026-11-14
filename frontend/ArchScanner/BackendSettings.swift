@@ -42,19 +42,6 @@ enum BackendSettingsStore {
     }
 }
 
-enum ProjectIdentity {
-    private static let key = "archscanner.projectID"
-
-    static func projectID() -> String {
-        if let existing = UserDefaults.standard.string(forKey: key), !existing.isEmpty {
-            return existing
-        }
-        let id = UUID().uuidString.lowercased()
-        UserDefaults.standard.set(id, forKey: key)
-        return id
-    }
-}
-
 enum MeshJobState: Equatable {
     case idle
     case submitting

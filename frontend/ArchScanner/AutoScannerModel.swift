@@ -21,12 +21,12 @@ struct ARViewContainer: UIViewRepresentable {
 final class AutoScannerModel: NSObject, ObservableObject, ARSessionDelegate {
     @Published var isScanning = false
     @Published var capturedCount = 0
-    @Published var statusText = "Наведите на объект и нажмите Начать"
+    @Published var statusText = "Наведите на объект и нажмите Старт"
     @Published var currentSeriesName = ""
     @Published var meshState: MeshJobState = .idle
     @Published var backendConfigured = BackendSettingsStore.load().isConfigured
     @Published var localMeshURL: URL?
-    /// Bumped when a freshly downloaded mesh should open in Quick Look.
+    /// Bumped when a freshly downloaded mesh should open in the viewer.
     @Published var previewTicket: URL?
 
     weak var arView: ARView?
@@ -34,20 +34,59 @@ final class AutoScannerModel: NSObject, ObservableObject, ARSessionDelegate {
     private var saveDirectory: URL?
     private var isSavingFrame = false
     private var meshTask: Task<Void, Never>?
+    private var boundProjectID: String = ""
+    private var cameraStarted = false
 
     private let minDistanceMeters: Float = 0.05
     private let minAngleDegrees: Float = 10.0
     private let minAmbientIntensity: CGFloat = 300
-    private let scansRootName = "Scans"
-    private let meshesRootName = "Meshes"
 
     override init() {
         super.init()
-        startNewSeries()
     }
 
     func reloadBackendSettings() {
         backendConfigured = BackendSettingsStore.load().isConfigured
+    }
+
+    /// Bind to an existing project version folder and start the camera preview (not scanning yet).
+    func bind(projectID: String, versionID: String, folder: URL) {
+        meshTask?.cancel()
+        meshTask = nil
+        setScanning(false)
+        boundProjectID = projectID
+        currentSeriesName = versionID
+        saveDirectory = folder
+        try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+
+        let existing = countExistingFrames(in: folder)
+        capturedCount = existing
+        lastCaptureTransform = nil
+        meshState = .idle
+        localMeshURL = nil
+        previewTicket = nil
+
+        if let meshURL = ProjectsStore.shared.localMeshURL(projectID: projectID, versionID: versionID) {
+            localMeshURL = meshURL
+            meshState = .ready
+        }
+
+        if existing > 0 {
+            statusText = "Кадров: \(existing) • \(versionID). Старт / Стоп"
+        } else {
+            statusText = "Камера готова • \(versionID). Нажмите Старт"
+        }
+
+        startCameraIfNeeded()
+    }
+
+    func startCameraIfNeeded() {
+        guard !cameraStarted else {
+            applyARConfiguration(scanning: isScanning)
+            return
+        }
+        cameraStarted = true
+        applyARConfiguration(scanning: false)
     }
 
     func setScanning(_ scanning: Bool) {
@@ -59,30 +98,24 @@ final class AutoScannerModel: NSObject, ObservableObject, ARSessionDelegate {
             if case .failed = meshState { meshState = .idle }
             if capturedCount == 0 {
                 statusText = "Сканирую… \(currentSeriesName)"
+            } else {
+                statusText = "Сканирую… кадров: \(capturedCount) • \(currentSeriesName)"
             }
-        } else {
-            statusText = "Пауза. Снято: \(capturedCount) • \(currentSeriesName)"
+        } else if !currentSeriesName.isEmpty {
+            statusText = "Стоп. Снято: \(capturedCount) • \(currentSeriesName)"
             if let folder = saveDirectory {
                 FrameMetadataWriter.writeSeriesManifest(
                     seriesName: currentSeriesName,
                     folder: folder,
                     frameCount: capturedCount
                 )
+                ProjectsStore.shared.updateFrameCount(
+                    projectID: boundProjectID,
+                    versionID: currentSeriesName,
+                    count: capturedCount
+                )
             }
         }
-    }
-
-    func resetSession() {
-        meshTask?.cancel()
-        meshTask = nil
-        setScanning(false)
-        capturedCount = 0
-        lastCaptureTransform = nil
-        meshState = .idle
-        localMeshURL = nil
-        previewTicket = nil
-        startNewSeries()
-        statusText = "Новая серия \(currentSeriesName). Готов к скану"
     }
 
     func submitMesh() {
@@ -96,8 +129,13 @@ final class AutoScannerModel: NSObject, ObservableObject, ARSessionDelegate {
             return
         }
 
-        let projectID = ProjectIdentity.projectID()
+        let projectID = boundProjectID
         let versionID = currentSeriesName
+        guard !projectID.isEmpty, !versionID.isEmpty else {
+            meshState = .failed("Нет проекта/версии")
+            return
+        }
+
         meshTask?.cancel()
         meshTask = Task { [weak self] in
             await self?.runSubmitMesh(baseURL: baseURL, projectID: projectID, versionID: versionID, folder: folder)
@@ -116,8 +154,10 @@ final class AutoScannerModel: NSObject, ObservableObject, ARSessionDelegate {
             meshState = .failed("Backend не настроен")
             return
         }
-        let projectID = ProjectIdentity.projectID()
+        let projectID = boundProjectID
         let versionID = currentSeriesName
+        guard !projectID.isEmpty, !versionID.isEmpty else { return }
+
         meshTask?.cancel()
         meshTask = Task { [weak self] in
             await self?.runFetchMesh(baseURL: baseURL, projectID: projectID, versionID: versionID, openPreview: true)
@@ -125,7 +165,11 @@ final class AutoScannerModel: NSObject, ObservableObject, ARSessionDelegate {
     }
 
     private func runSubmitMesh(baseURL: URL, projectID: String, versionID: String, folder: URL) async {
-        await MainActor.run { meshState = .submitting }
+        await MainActor.run {
+            meshState = .submitting
+            ProjectsStore.shared.clearMesh(projectID: projectID, versionID: versionID)
+            localMeshURL = nil
+        }
 
         do {
             let client = MeshAPIClient(baseURL: baseURL)
@@ -137,7 +181,6 @@ final class AutoScannerModel: NSObject, ObservableObject, ARSessionDelegate {
             )
             await MainActor.run {
                 meshState = .processing(jobID: jobID)
-                localMeshURL = nil
                 statusText = "Меш в очереди • \(versionID)"
             }
             try await pollUntilReady(client: client, projectID: projectID, versionID: versionID, openPreview: false)
@@ -176,11 +219,16 @@ final class AutoScannerModel: NSObject, ObservableObject, ARSessionDelegate {
             let status = try await client.fetchMeshFile(projectID: projectID, versionID: versionID)
             switch status {
             case .ready(let data, let name):
-                let url = try saveMeshData(data, suggestedName: name, versionID: versionID)
+                let url = try saveMeshData(data, suggestedName: name, projectID: projectID, versionID: versionID)
                 await MainActor.run {
                     localMeshURL = url
                     meshState = .ready
                     statusText = "Меш готов • \(versionID)"
+                    ProjectsStore.shared.markMeshReady(
+                        projectID: projectID,
+                        versionID: versionID,
+                        fileName: url.lastPathComponent
+                    )
                     if openPreview {
                         previewTicket = url
                     }
@@ -210,12 +258,17 @@ final class AutoScannerModel: NSObject, ObservableObject, ARSessionDelegate {
         }
     }
 
-    private func saveMeshData(_ data: Data, suggestedName: String, versionID: String) throws -> URL {
-        let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-        let root = docs.appendingPathComponent(meshesRootName, isDirectory: true)
-        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-        let safeName = suggestedName.isEmpty ? "\(versionID).usdz" : suggestedName
-        let url = root.appendingPathComponent(safeName)
+    private func saveMeshData(
+        _ data: Data,
+        suggestedName: String,
+        projectID: String,
+        versionID: String
+    ) throws -> URL {
+        let url = ProjectPaths.meshSaveURL(
+            projectID: projectID,
+            versionID: versionID,
+            suggestedName: suggestedName.isEmpty ? "\(versionID).usdz" : suggestedName
+        )
         if FileManager.default.fileExists(atPath: url.path) {
             try FileManager.default.removeItem(at: url)
         }
@@ -241,49 +294,16 @@ final class AutoScannerModel: NSObject, ObservableObject, ARSessionDelegate {
         arView.session.run(config, options: [])
     }
 
-    private func scansRootURL() -> URL {
-        let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-        let root = docs.appendingPathComponent(scansRootName, isDirectory: true)
-        try? FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-        return root
+    func pauseCamera() {
+        setScanning(false)
+        arView?.session.pause()
+        cameraStarted = false
+        UIApplication.shared.isIdleTimerDisabled = false
     }
 
-    private func todayPrefix() -> String {
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.timeZone = .current
-        formatter.dateFormat = "yyyy-MM-dd"
-        return formatter.string(from: Date())
-    }
-
-    private func startNewSeries() {
-        let root = scansRootURL()
-        let prefix = todayPrefix()
-        let nextIndex = nextSeriesIndex(in: root, prefix: prefix)
-        let name = String(format: "%@_%03d", prefix, nextIndex)
-        let folder = root.appendingPathComponent(name, isDirectory: true)
-        try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-        saveDirectory = folder
-        currentSeriesName = name
-        FrameMetadataWriter.writeSeriesManifest(seriesName: name, folder: folder, frameCount: 0)
-    }
-
-    private func nextSeriesIndex(in root: URL, prefix: String) -> Int {
-        let fm = FileManager.default
-        let names = (try? fm.contentsOfDirectory(atPath: root.path)) ?? []
-        var maxIndex = 0
-        let pattern = #"^\#(NSRegularExpression.escapedPattern(for: prefix))_(\d+)$"#
-        guard let regex = try? NSRegularExpression(pattern: pattern) else { return 1 }
-
-        for name in names {
-            let range = NSRange(name.startIndex..<name.endIndex, in: name)
-            guard let match = regex.firstMatch(in: name, range: range),
-                  match.numberOfRanges == 2,
-                  let idxRange = Range(match.range(at: 1), in: name),
-                  let value = Int(name[idxRange]) else { continue }
-            maxIndex = max(maxIndex, value)
-        }
-        return maxIndex + 1
+    private func countExistingFrames(in folder: URL) -> Int {
+        let urls = (try? FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil)) ?? []
+        return urls.filter { $0.pathExtension.lowercased() == "jpg" || $0.pathExtension.lowercased() == "jpeg" }.count
     }
 
     func session(_ session: ARSession, didUpdate frame: ARFrame) {
@@ -328,6 +348,8 @@ final class AutoScannerModel: NSObject, ObservableObject, ARSessionDelegate {
         let pixelBuffer = frame.capturedImage
         let currentCount = capturedCount + 1
         let orientation = CGImagePropertyOrientation.right
+        let projectID = boundProjectID
+        let seriesName = currentSeriesName
 
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             defer { self?.isSavingFrame = false }
@@ -353,15 +375,21 @@ final class AutoScannerModel: NSObject, ObservableObject, ARSessionDelegate {
                     to: folder
                 )
                 FrameMetadataWriter.writeSeriesManifest(
-                    seriesName: self?.currentSeriesName ?? "",
+                    seriesName: seriesName,
                     folder: folder,
                     frameCount: currentCount
                 )
                 DispatchQueue.main.async {
                     self?.capturedCount = currentCount
-                    let series = self?.currentSeriesName ?? ""
-                    self?.statusText = "Кадров: \(currentCount) • \(series)"
+                    self?.statusText = "Кадров: \(currentCount) • \(seriesName)"
                     UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                    if !projectID.isEmpty {
+                        ProjectsStore.shared.updateFrameCount(
+                            projectID: projectID,
+                            versionID: seriesName,
+                            count: currentCount
+                        )
+                    }
                 }
             } catch {
                 print("Save error: \(error)")

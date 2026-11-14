@@ -1,0 +1,76 @@
+# yaml-language-server: $schema=https://taskfile.dev/schema.json
+
+version: '3'
+
+vars:
+  WIN_VM: windows-nvme
+  WIN_VIEW_LOG: /tmp/virt-viewer-{{.WIN_VM}}.log
+
+tasks:
+  win:
+    desc: Start Windows VM (libvirt), non-blocking — console free
+    cmds:
+      - |
+        state="$(virsh domstate {{.WIN_VM}} 2>/dev/null | tr -d '[:space:]' || true)"
+        if [ "$state" = "running" ]; then
+          echo "{{.WIN_VM}} already running"
+          exit 0
+        fi
+        virsh start {{.WIN_VM}}
+        echo "{{.WIN_VM}} started"
+
+  win:view:
+    desc: Start Windows VM if needed, then open SPICE window (non-blocking)
+    cmds:
+      - task: win
+      - |
+        set -e
+        export DISPLAY="${DISPLAY:-:0}"
+        # wait until domain is running (start is async from guest POV)
+        for i in 1 2 3 4 5 6 7 8 9 10; do
+          state="$(virsh domstate {{.WIN_VM}} 2>/dev/null | tr -d '[:space:]' || true)"
+          [ "$state" = "running" ] && break
+          sleep 0.3
+        done
+        if [ "$state" != "running" ]; then
+          echo "{{.WIN_VM}} failed to reach running (state=$state)"
+          exit 1
+        fi
+        if pgrep -x virt-viewer >/dev/null 2>&1; then
+          echo "virt-viewer already running"
+          exit 0
+        fi
+        # avoid $$! — Task/bash mangles it; use pgrep -n after start
+        nohup virt-viewer --attach {{.WIN_VM}} >"{{.WIN_VIEW_LOG}}" 2>&1 &
+        sleep 0.4
+        pid="$(pgrep -n -x virt-viewer || true)"
+        if [ -z "$pid" ]; then
+          echo "virt-viewer exited immediately; log:"
+          cat "{{.WIN_VIEW_LOG}}" || true
+          exit 1
+        fi
+        echo "virt-viewer started (pid $pid), DISPLAY=$DISPLAY"
+        echo "log: {{.WIN_VIEW_LOG}}"
+
+  win:stop:
+    desc: Close virt-viewer and force-stop Windows VM
+    cmds:
+      - |
+        if pgrep -x virt-viewer >/dev/null 2>&1; then
+          killall virt-viewer 2>/dev/null || true
+          echo "virt-viewer stopped"
+        else
+          echo "virt-viewer not running"
+        fi
+        state="$(virsh domstate {{.WIN_VM}} 2>/dev/null | tr -d '[:space:]' || true)"
+        if [ "$state" = "running" ] || [ "$state" = "paused" ]; then
+          virsh destroy {{.WIN_VM}}
+          echo "{{.WIN_VM}} destroyed (was $state)"
+        else
+          echo "{{.WIN_VM}} already stopped (state=${state:-unknown})"
+        fi
+
+  win:status:
+    desc: Show Windows VM state
+    cmds:
+      - virsh domstate {{.WIN_VM}}

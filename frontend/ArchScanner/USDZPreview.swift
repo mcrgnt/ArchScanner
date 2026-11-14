@@ -1,6 +1,7 @@
 import SwiftUI
 import QuickLook
 
+/// Legacy Quick Look sheet — kept as fallback; primary viewer is MeshViewerView.
 struct USDZPreviewSheet: UIViewControllerRepresentable {
     let url: URL
 

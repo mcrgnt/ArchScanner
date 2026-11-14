@@ -1,65 +1,54 @@
 import SwiftUI
 
 struct SettingsView: View {
-    @Environment(\.dismiss) private var dismiss
     @State private var settings = BackendSettingsStore.load()
     @State private var testMessage: String?
     @State private var isTesting = false
 
     var body: some View {
-        NavigationStack {
-            Form {
-                Section {
-                    TextField("host:port или http://…", text: $settings.baseURL)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                        .keyboardType(.URL)
-                } header: {
-                    Text("Backend")
-                } footer: {
-                    Text("HTTP через VPN, например 100.64.0.2:8780. Project ID: \(ProjectIdentity.projectID())")
-                        .font(.caption2)
+        Form {
+            Section {
+                TextField("host:port или http://…", text: $settings.baseURL)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .keyboardType(.URL)
+            } header: {
+                Text("Backend")
+            } footer: {
+                Text("HTTP через VPN, например 100.64.0.2:8780")
+                    .font(.caption2)
+            }
+
+            Section {
+                Button {
+                    BackendSettingsStore.save(settings)
+                    testMessage = "Сохранено"
+                } label: {
+                    Text("Сохранить")
                 }
 
-                Section {
-                    Button {
-                        BackendSettingsStore.save(settings)
-                        testMessage = "Сохранено"
-                    } label: {
-                        Text("Сохранить")
-                    }
-
-                    Button {
-                        Task { await testConnection() }
-                    } label: {
-                        if isTesting {
-                            ProgressView()
-                        } else {
-                            Text("Проверить соединение")
-                        }
-                    }
-                    .disabled(!settings.isConfigured || isTesting)
-
-                    if let testMessage {
-                        Text(testMessage)
-                            .font(.footnote)
-                            .foregroundStyle(testMessage.hasPrefix("OK") ? .green : .secondary)
+                Button {
+                    Task { await testConnection() }
+                } label: {
+                    if isTesting {
+                        ProgressView()
+                    } else {
+                        Text("Проверить соединение")
                     }
                 }
-            }
-            .navigationTitle("Настройки")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button("Закрыть") {
-                        BackendSettingsStore.save(settings)
-                        dismiss()
-                    }
+                .disabled(!settings.isConfigured || isTesting)
+
+                if let testMessage {
+                    Text(testMessage)
+                        .font(.footnote)
+                        .foregroundStyle(testMessage.hasPrefix("OK") ? .green : .secondary)
                 }
             }
-            .onDisappear {
-                BackendSettingsStore.save(settings)
-            }
+        }
+        .navigationTitle("Настройки")
+        .navigationBarTitleDisplayMode(.inline)
+        .onDisappear {
+            BackendSettingsStore.save(settings)
         }
     }
 
