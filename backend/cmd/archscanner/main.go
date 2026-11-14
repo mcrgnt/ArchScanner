@@ -23,8 +23,9 @@ type _appResources struct {
 	ServerHTTPOps *ophttp.Server                  `ecfg:"OPS_HTTP"`
 	ServerHTTP    *srvhttp.Server[*httpapi.Router] `ecfg:"SERVER_HTTP"`
 	Router        *httpapi.Router
+	Store         *archscanner.Store `ecfg:"DATA"`
 	Service       *archscanner.Service
-	Meshroom      *meshroom.Handler
+	Meshroom      *meshroom.Runner `ecfg:"MESHROOM"`
 }
 
 var appResources _appResources

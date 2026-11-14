@@ -12,6 +12,7 @@ photos/
 photos_toy/
 photos_scans/
 meshroom/
+data/
 dist/
 backend/bin/
 *.exe

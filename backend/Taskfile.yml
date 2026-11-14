@@ -1,0 +1,25 @@
+# yaml-language-server: $schema=https://taskfile.dev/schema.json
+
+version: '3'
+
+vars:
+  BIN: bin/archscanner
+
+tasks:
+  test:
+    desc: Run archscanner unit tests
+    cmds:
+      - go test ./...
+
+  build:
+    desc: Build archscanner binary
+    cmds:
+      - mkdir -p bin
+      - go build -o {{.BIN}} ./cmd/archscanner
+
+  run:
+    desc: Build and run archscanner (reads .env in this directory)
+    deps: [build]
+    dotenv: ['.env']
+    cmds:
+      - '{{.BIN}}'
