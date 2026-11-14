@@ -12,3 +12,6 @@ photos/
 photos_toy/
 photos_scans/
 meshroom/
+dist/
+backend/bin/
+*.exe
