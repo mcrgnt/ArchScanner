@@ -170,7 +170,7 @@ final class AutoScannerModel: NSObject, ObservableObject, ARSessionDelegate {
         projectID: String,
         versionID: String,
         openPreview: Bool
-    ) async {
+    ) async throws {
         for _ in 0..<120 {
             try Task.checkCancellation()
             let status = try await client.fetchMeshFile(projectID: projectID, versionID: versionID)
