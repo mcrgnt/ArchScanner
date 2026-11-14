@@ -1,0 +1,20 @@
+go 1.26.2
+
+use .
+
+replace (
+	github.com/omcrgnt/app => /opt/github/app
+	github.com/omcrgnt/ecfg => /opt/github/ecfg
+	github.com/omcrgnt/logger => /opt/github/logger
+	github.com/omcrgnt/meta => /opt/github/meta
+	github.com/omcrgnt/obs => /opt/github/obs
+	github.com/omcrgnt/ops => /opt/github/ops
+	github.com/omcrgnt/port => /opt/github/port
+	github.com/omcrgnt/proto/gen/go => /opt/github/proto/gen/go
+	github.com/omcrgnt/res => /opt/github/res
+	github.com/omcrgnt/runner => /opt/github/runner
+	github.com/omcrgnt/scheduler => /opt/github/scheduler
+	github.com/omcrgnt/sdi => /opt/github/sdi
+	github.com/omcrgnt/srv-http => /opt/github/srv-http
+	github.com/omcrgnt/telemetry => /opt/github/telemetry
+)
