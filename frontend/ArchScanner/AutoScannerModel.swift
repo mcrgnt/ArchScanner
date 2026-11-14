@@ -23,31 +23,31 @@ final class AutoScannerModel: NSObject, ObservableObject, ARSessionDelegate {
     @Published var capturedCount = 0
     @Published var statusText = "Наведите на объект и нажмите Начать"
     @Published var currentSeriesName = ""
-    @Published var exportState: SeriesExportState = .idle
-    @Published var exportConfigured = ExportSettingsStore.load().isConfigured
+    @Published var meshState: MeshJobState = .idle
+    @Published var backendConfigured = BackendSettingsStore.load().isConfigured
+    @Published var localMeshURL: URL?
+    /// Bumped when a freshly downloaded mesh should open in Quick Look.
+    @Published var previewTicket: URL?
 
     weak var arView: ARView?
     private var lastCaptureTransform: simd_float4x4?
     private var saveDirectory: URL?
     private var isSavingFrame = false
-    private var exportTask: Task<Void, Never>?
+    private var meshTask: Task<Void, Never>?
 
     private let minDistanceMeters: Float = 0.05
     private let minAngleDegrees: Float = 10.0
     private let minAmbientIntensity: CGFloat = 300
     private let scansRootName = "Scans"
-
-    var canExport: Bool {
-        capturedCount > 0 && exportConfigured && !isScanning
-    }
+    private let meshesRootName = "Meshes"
 
     override init() {
         super.init()
         startNewSeries()
     }
 
-    func reloadExportSettings() {
-        exportConfigured = ExportSettingsStore.load().isConfigured
+    func reloadBackendSettings() {
+        backendConfigured = BackendSettingsStore.load().isConfigured
     }
 
     func setScanning(_ scanning: Bool) {
@@ -56,8 +56,7 @@ final class AutoScannerModel: NSObject, ObservableObject, ARSessionDelegate {
         applyARConfiguration(scanning: scanning)
 
         if scanning {
-            if case .success = exportState { exportState = .idle }
-            if case .failed = exportState { exportState = .idle }
+            if case .failed = meshState { meshState = .idle }
             if capturedCount == 0 {
                 statusText = "Сканирую… \(currentSeriesName)"
             }
@@ -74,82 +73,154 @@ final class AutoScannerModel: NSObject, ObservableObject, ARSessionDelegate {
     }
 
     func resetSession() {
-        exportTask?.cancel()
-        exportTask = nil
+        meshTask?.cancel()
+        meshTask = nil
         setScanning(false)
         capturedCount = 0
         lastCaptureTransform = nil
-        exportState = .idle
+        meshState = .idle
+        localMeshURL = nil
+        previewTicket = nil
         startNewSeries()
         statusText = "Новая серия \(currentSeriesName). Готов к скану"
     }
 
-    func exportCurrentSeries() {
-        guard capturedCount > 0, exportConfigured, !isScanning else { return }
-        if case .exporting = exportState { return }
+    func submitMesh() {
+        guard capturedCount > 0, backendConfigured, !isScanning else { return }
+        if case .submitting = meshState { return }
+        if case .processing = meshState { return }
 
-        let settings = ExportSettingsStore.load()
-        guard settings.isConfigured, let folder = saveDirectory else {
-            exportState = .failed("Экспорт не настроен")
+        let settings = BackendSettingsStore.load()
+        guard let baseURL = try? settings.resolvedBaseURL(), let folder = saveDirectory else {
+            meshState = .failed("Backend не настроен")
             return
         }
 
-        let seriesName = currentSeriesName
-        exportTask?.cancel()
-        exportTask = Task { [weak self] in
-            await self?.runExport(settings: settings, folder: folder, seriesName: seriesName)
+        let projectID = ProjectIdentity.projectID()
+        let versionID = currentSeriesName
+        meshTask?.cancel()
+        meshTask = Task { [weak self] in
+            await self?.runSubmitMesh(baseURL: baseURL, projectID: projectID, versionID: versionID, folder: folder)
         }
     }
 
-    private func runExport(settings: ExportSettings, folder: URL, seriesName: String) async {
-        await MainActor.run { exportState = .exporting(done: 0, total: 0) }
+    func fetchMeshForPreview() {
+        guard backendConfigured else { return }
+        if case .ready = meshState, let url = localMeshURL {
+            previewTicket = url
+            return
+        }
+
+        let settings = BackendSettingsStore.load()
+        guard let baseURL = try? settings.resolvedBaseURL() else {
+            meshState = .failed("Backend не настроен")
+            return
+        }
+        let projectID = ProjectIdentity.projectID()
+        let versionID = currentSeriesName
+        meshTask?.cancel()
+        meshTask = Task { [weak self] in
+            await self?.runFetchMesh(baseURL: baseURL, projectID: projectID, versionID: versionID, openPreview: true)
+        }
+    }
+
+    private func runSubmitMesh(baseURL: URL, projectID: String, versionID: String, folder: URL) async {
+        await MainActor.run { meshState = .submitting }
 
         do {
-            switch settings.method {
-            case .s3:
-                try await exportToS3(config: settings.s3, folder: folder, seriesName: seriesName)
-            }
+            let client = MeshAPIClient(baseURL: baseURL)
+            let jobID = try await client.submitMesh(
+                projectID: projectID,
+                versionID: versionID,
+                folder: folder,
+                format: "usdz"
+            )
             await MainActor.run {
-                exportState = .success
-                statusText = "Экспорт OK • \(seriesName)"
+                meshState = .processing(jobID: jobID)
+                localMeshURL = nil
+                statusText = "Меш в очереди • \(versionID)"
             }
+            try await pollUntilReady(client: client, projectID: projectID, versionID: versionID, openPreview: false)
         } catch is CancellationError {
-            await MainActor.run { exportState = .idle }
+            await MainActor.run { meshState = .idle }
         } catch {
             await MainActor.run {
-                exportState = .failed(error.localizedDescription)
-                statusText = "Экспорт ошибка • \(seriesName)"
+                meshState = .failed(error.localizedDescription)
+                statusText = "Меш ошибка • \(versionID)"
             }
         }
     }
 
-    private func exportToS3(config: S3ExportConfig, folder: URL, seriesName: String) async throws {
-        let fm = FileManager.default
-        let files = (try? fm.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil))?
-            .filter { !$0.hasDirectoryPath }
-            .sorted { $0.lastPathComponent < $1.lastPathComponent } ?? []
-        guard !files.isEmpty else { throw S3ExportError.emptySeries }
-
-        let exporter = S3Exporter(config: config)
-        try await exporter.ensureBucket()
-
-        let prefix = config.prefix.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-        let total = files.count
-        await MainActor.run { exportState = .exporting(done: 0, total: total) }
-
-        for (idx, file) in files.enumerated() {
-            try Task.checkCancellation()
-            let keyParts = [prefix, seriesName, file.lastPathComponent].filter { !$0.isEmpty }
-            let key = keyParts.joined(separator: "/")
-            let contentType: String
-            switch file.pathExtension.lowercased() {
-            case "jpg", "jpeg": contentType = "image/jpeg"
-            case "json": contentType = "application/json"
-            default: contentType = "application/octet-stream"
+    private func runFetchMesh(baseURL: URL, projectID: String, versionID: String, openPreview: Bool) async {
+        do {
+            let client = MeshAPIClient(baseURL: baseURL)
+            try await pollUntilReady(client: client, projectID: projectID, versionID: versionID, openPreview: openPreview)
+        } catch is CancellationError {
+            // keep current state
+        } catch {
+            await MainActor.run {
+                meshState = .failed(error.localizedDescription)
+                statusText = "Меш ошибка • \(versionID)"
             }
-            try await exporter.uploadFile(localURL: file, key: key, contentType: contentType)
-            await MainActor.run { exportState = .exporting(done: idx + 1, total: total) }
         }
+    }
+
+    private func pollUntilReady(
+        client: MeshAPIClient,
+        projectID: String,
+        versionID: String,
+        openPreview: Bool
+    ) async {
+        for _ in 0..<120 {
+            try Task.checkCancellation()
+            let status = try await client.fetchMeshFile(projectID: projectID, versionID: versionID)
+            switch status {
+            case .ready(let data, let name):
+                let url = try saveMeshData(data, suggestedName: name, versionID: versionID)
+                await MainActor.run {
+                    localMeshURL = url
+                    meshState = .ready
+                    statusText = "Меш готов • \(versionID)"
+                    if openPreview {
+                        previewTicket = url
+                    }
+                }
+                return
+            case .processing:
+                await MainActor.run {
+                    if case .processing = meshState {
+                        // keep
+                    } else {
+                        meshState = .processing(jobID: "")
+                    }
+                    statusText = "Меш считается… • \(versionID)"
+                }
+                try await Task.sleep(nanoseconds: 2_000_000_000)
+            case .missing:
+                await MainActor.run {
+                    meshState = .failed("Меш не найден")
+                    statusText = "Меш не найден • \(versionID)"
+                }
+                return
+            }
+        }
+        await MainActor.run {
+            meshState = .failed("Таймаут ожидания меша")
+            statusText = "Меш таймаут • \(versionID)"
+        }
+    }
+
+    private func saveMeshData(_ data: Data, suggestedName: String, versionID: String) throws -> URL {
+        let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        let root = docs.appendingPathComponent(meshesRootName, isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let safeName = suggestedName.isEmpty ? "\(versionID).usdz" : suggestedName
+        let url = root.appendingPathComponent(safeName)
+        if FileManager.default.fileExists(atPath: url.path) {
+            try FileManager.default.removeItem(at: url)
+        }
+        try data.write(to: url)
+        return url
     }
 
     func applyARConfiguration(scanning: Bool) {
@@ -290,7 +361,6 @@ final class AutoScannerModel: NSObject, ObservableObject, ARSessionDelegate {
                     self?.capturedCount = currentCount
                     let series = self?.currentSeriesName ?? ""
                     self?.statusText = "Кадров: \(currentCount) • \(series)"
-                    if case .success = self?.exportState { self?.exportState = .idle }
                     UIImpactFeedbackGenerator(style: .light).impactOccurred()
                 }
             } catch {

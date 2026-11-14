@@ -25,7 +25,7 @@
 	<key>NSCameraUsageDescription</key>
 	<string>Нужна камера и LiDAR для 3D-сканирования колесной арки</string>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>Нужен доступ к MinIO/S3 в локальной сети для экспорта сканов</string>
+	<string>Нужен доступ к ArchScanner backend в локальной сети / VPN</string>
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<key>NSAllowsLocalNetworking</key>

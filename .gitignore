@@ -15,4 +15,5 @@ meshroom/
 data/
 dist/
 backend/bin/
+frontend/**/Meshes/
 *.exe
